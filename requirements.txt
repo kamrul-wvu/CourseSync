@@ -3,3 +3,9 @@ pandas
 numpy
 openpyxl
 matplotlib
+os
+re
+webbrowser
+defaultdict
+datetime
+time

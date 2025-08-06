@@ -61,6 +61,8 @@ def get_free_slots(df_dept_day, start_bound, end_bound):
     ]
 
 def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.html"):
+    from datetime import time
+
     df_calendar[['Days', 'Start Time', 'End Time']] = df_calendar['Meeting Pattern'].apply(parse_meeting_pattern)
     df_calendar['StartTimeObj'] = df_calendar['Start Time'].apply(to_datetime_time_safe)
     df_calendar['EndTimeObj'] = df_calendar['End Time'].apply(to_datetime_time_safe)
@@ -68,14 +70,30 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
     df_calendar.dropna(subset=['StartTimeObj', 'EndTimeObj'], inplace=True)
 
     clash_entries = []
+    wednesday_4_5_clashes = []
     free_slots_by_dept = defaultdict(lambda: defaultdict(list))
+
+    wednesday_restricted_start = time(16, 0)
+    wednesday_restricted_end = time(17, 0)
 
     for dept, group in df_calendar.groupby('Department'):
         g = group.copy()
         g['Days'] = g['Days'].apply(lambda x: [day_lookup.get(d, d) for d in x if d in day_lookup])
         g = g.explode('Days').reset_index(drop=True)
 
-        # Clash detection
+        # Detect Wednesday 4–5PM restricted clashes
+        wednesday_rows = g[g['Days'] == 'Wednesday']
+        for _, row in wednesday_rows.iterrows():
+            if time_overlap(row['StartTimeObj'], row['EndTimeObj'], wednesday_restricted_start, wednesday_restricted_end):
+                wednesday_4_5_clashes.append({
+                    "Department": dept,
+                    "Course": row['Course'],
+                    "Section": row['Section #'],
+                    "Time": f"{row['Start Time']}–{row['End Time']}",
+                    "Day": row['Days']
+                })
+
+        # Detect clashes
         for i, row_i in g.iterrows():
             for j, row_j in g.iterrows():
                 if i >= j or row_i['Days'] != row_j['Days']:
@@ -87,9 +105,7 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
                     if level_i is None or level_j is None:
                         continue
                     levels = sorted([level_i // 100, level_j // 100])
-                    
 
-                    # Make all clashes involving CSEE department acceptable
                     if row_i['Department'] == 'CSEE' or row_j['Department'] == 'CSEE':
                         row_class = "green-row"
                     else:
@@ -110,6 +126,11 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
         for day in days_order:
             g_day = g[g['Days'] == day]
             slots = get_free_slots(g_day, time(9, 0), time(20, 50))
+
+            # ❌ Exclude only the exact 4–5 PM slot on Wednesday
+            if day == "Wednesday":
+                slots = [s for s in slots if not (s[0] == wednesday_restricted_start and s[1] == wednesday_restricted_end)]
+
             free_slots_by_dept[dept][day] = slots
 
     df_clashes = pd.DataFrame(clash_entries)
@@ -135,7 +156,6 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
     </style></head><body>
     <h1>Detected Course Clashes</h1>"""
 
-    # Ensure CS and EE appear first
     all_departments = sorted(
         df_calendar['Department'].dropna().unique(),
         key=lambda x: (x not in ["CS", "EE"], x)
@@ -144,9 +164,7 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
     for dept in all_departments:
         html += f"<h2>{dept} Department</h2>"
 
-        dept_group = grouped[grouped['Department'] == dept]
-
-        # Free Slot Table
+        # 📅 Free Slot Table with 🔒 Lock
         html += "<h3>📆 Weekly Free Slot Overview (1-Hour Blocks)</h3>"
         html += "<table style='text-align:center; border-collapse:collapse;'><tr><th style='border:1px solid #aaa;'>Time</th>"
         html += "".join(f"<th style='border:1px solid #aaa;'>{day}</th>" for day in days_order)
@@ -154,7 +172,7 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
 
         hour_slots = []
         t = time(9, 0)
-        while (t.hour * 60 + t.minute) <= (20 * 60):  # until 8:00 PM
+        while (t.hour * 60 + t.minute) <= (20 * 60):
             end_minutes = (t.hour * 60 + t.minute) + 60
             end_hour, end_min = divmod(end_minutes, 60)
             end = time(end_hour, end_min)
@@ -164,20 +182,42 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
         for s, e in hour_slots:
             html += f"<tr><td style='border:1px solid #aaa;'>{s.strftime('%I:%M %p')}–{e.strftime('%I:%M %p')}</td>"
             for day in days_order:
-                slot_found = any(
-                    (fs <= s and fe >= e) or
-                    (s == time(20, 0) and (fe.hour * 60 + fe.minute) - (fs.hour * 60 + fs.minute) >= 50 and fs <= s and fe >= s)
-                    for fs, fe in free_slots_by_dept[dept][day]
-                )
-                html += f"<td style='border:1px solid #aaa; color:{'green' if slot_found else '#bbb'};'>{'✅' if slot_found else '—'}</td>"
+                if day == "Wednesday" and s == wednesday_restricted_start and e == wednesday_restricted_end:
+                    icon = "🔒"
+                    color = "red"
+                else:
+                    slot_found = any(
+                        (fs <= s and fe >= e) or
+                        (s == time(20, 0) and (fe.hour * 60 + fe.minute) - (fs.hour * 60 + fs.minute) >= 50 and fs <= s and fe >= s)
+                        for fs, fe in free_slots_by_dept[dept][day]
+                    )
+                    icon = "✅" if slot_found else "—"
+                    color = "green" if slot_found else "#bbb"
+                html += f"<td style='border:1px solid #aaa; color:{color};'>{icon}</td>"
             html += "</tr>"
         html += "</table>"
 
         # Clashes
+        # 🔴 Special Table: Wednesday 4–5 PM Conflicts
+        # 🔴 Wednesday 4–5 PM slot restricted courses
+        dept_wed_clashes = [c for c in wednesday_4_5_clashes if c["Department"] == dept]
+        if dept_wed_clashes:
+            html += "<h3>⚠️ Wednesday 4:00–5:00 PM Restricted Slot Courses</h3>"
+            html += f"<p style='color:red; font-weight:bold;'>🔴 {len(dept_wed_clashes)} Violations</p>"
+            html += "<table><tr><th>Course</th><th>Section</th><th>Day</th><th>Time</th></tr>"
+            for clash in dept_wed_clashes:
+                html += f"<tr class='red-row'><td>{clash['Course']}</td><td>{clash['Section']}</td><td>{clash['Day']}</td><td>{clash['Time']}</td></tr>"
+            html += "</table>"
+
+        # 🔴🟢 Clash tables with violation counters
+        dept_group = grouped[grouped['Department'] == dept]
         for label, color in [('Non-Acceptable Clashes', 'red-row'), ('Acceptable Clashes', 'green-row')]:
             section = dept_group[dept_group['RowClass'] == color]
             html += f"<h3>{label}</h3>"
             if not section.empty:
+                count_label = f"<p style='color:{'red' if color == 'red-row' else 'green'}; font-weight:bold;'>"
+                count_label += f"{'🔴' if color == 'red-row' else '🟢'} {len(section)} {'Violations' if color == 'red-row' else 'Accepted Clashes'}</p>"
+                html += count_label
                 html += "<table><tr><th>Course A</th><th>Section A</th><th>Course B</th><th>Section B</th><th>Day(s)</th><th>Time</th></tr>"
                 for _, row in section.iterrows():
                     html += f"<tr class='{row['RowClass']}'><td>{row['Course A']}</td><td>{row['Section A']}</td><td>{row['Course B']}</td><td>{row['Section B']}</td><td>{row['Day(s)']}</td><td>{row['Time']}</td></tr>"
@@ -191,7 +231,16 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
 
-    return output_path
+    # Count red (non-acceptable) clashes
+    red_count = len(grouped[grouped["RowClass"] == "red-row"])
+    # Count Wednesday 4–5 PM violations
+    wed_count = len([c for c in wednesday_4_5_clashes])
+
+    return output_path, {
+        "non_acceptable": red_count,
+        "wednesday_4_5": wed_count
+    }
+
 
 def generate_cross_dept_clash_report(df_calendar, output_path="calendar_site/cross_report.html"):
     df_calendar[['Days', 'Start Time', 'End Time']] = df_calendar['Meeting Pattern'].apply(parse_meeting_pattern)
@@ -206,6 +255,7 @@ def generate_cross_dept_clash_report(df_calendar, output_path="calendar_site/cro
 
     valid_depts = ["CS", "EE", "CPE"]
     clash_entries = []
+    special_csee_clashes = []
 
     for i, row_i in g.iterrows():
         for j, row_j in g.iterrows():
@@ -213,33 +263,45 @@ def generate_cross_dept_clash_report(df_calendar, output_path="calendar_site/cro
                 continue
 
             dept_i, dept_j = row_i['Department'], row_j['Department']
-            if dept_i not in valid_depts or dept_j not in valid_depts or dept_i == dept_j:
+            course_i, course_j = row_i['Course'], row_j['Course']
+            level_i = extract_course_level(course_i)
+            level_j = extract_course_level(course_j)
+
+            if level_i is None or level_j is None:
                 continue
 
-            if time_overlap(row_i['StartTimeObj'], row_i['EndTimeObj'], row_j['StartTimeObj'], row_j['EndTimeObj']):
-                level_i = extract_course_level(row_i['Course'])
-                level_j = extract_course_level(row_j['Course'])
-                if level_i is None or level_j is None:
-                    continue
+            if not time_overlap(row_i['StartTimeObj'], row_i['EndTimeObj'], row_j['StartTimeObj'], row_j['EndTimeObj']):
+                continue
 
+            # 🔴 Special rule: CSEE 480S or 481S cannot clash with any 300/400-level course
+            if (course_i in ["CSEE 480S", "CSEE 481S"] and 300 <= level_j < 500) or \
+               (course_j in ["CSEE 480S", "CSEE 481S"] and 300 <= level_i < 500):
+                special_csee_clashes.append({
+                    "Course A": course_i, "Section A": row_i['Section #'],
+                    "Course B": course_j, "Section B": row_j['Section #'],
+                    "Time": f"{row_i['Start Time']}–{row_i['End Time']}",
+                    "Day(s)": row_i['Days'],
+                    "RowClass": "red-row"
+                })
+                continue
+
+            # 🔴 CS/EE/CPE same-level (300–700) clashes
+            if dept_i in valid_depts and dept_j in valid_depts and dept_i != dept_j:
                 level_group_i = level_i // 100
                 level_group_j = level_j // 100
-
-                # Check red clash between same levels 300–700
                 if 3 <= level_group_i <= 7 and level_group_i == level_group_j:
                     dept_pair = tuple(sorted([dept_i, dept_j]))
                     if dept_pair in [("CS", "EE"), ("CS", "CPE"), ("EE", "CPE")]:
                         clash_entries.append({
                             "DeptPair": dept_pair,
-                            "Course A": row_i['Course'], "Section A": row_i['Section #'],
-                            "Course B": row_j['Course'], "Section B": row_j['Section #'],
+                            "Course A": course_i, "Section A": row_i['Section #'],
+                            "Course B": course_j, "Section B": row_j['Section #'],
                             "Time": f"{row_i['Start Time']}–{row_i['End Time']}",
                             "Day(s)": row_i['Days'],
                             "RowClass": "red-row"
                         })
 
     df_clashes = pd.DataFrame(clash_entries)
-
     if not df_clashes.empty:
         grouped = df_clashes.groupby(
             ["DeptPair", "Course A", "Section A", "Course B", "Section B", "Time", "RowClass"]
@@ -257,12 +319,16 @@ def generate_cross_dept_clash_report(df_calendar, output_path="calendar_site/cro
     tr:nth-child(even) { background-color: #f2f2f2; }
     .red-row { background-color: #ffdddd !important; }
     </style></head><body>
-    <h1>Cross-Department Clashes (Same Level-300 and Above)</h1>"""
+    <h1>Cross-Department Clashes</h1>"""
 
-    for pair in [('CS', 'EE'), ('CS', 'CPE'), ('EE', 'CPE')]:
+
+
+    # 🔴 CS–EE, EE–CPE, CS–CPE Clashes with red violation count
+    for pair in [('CS', 'EE'), ('EE', 'CPE'), ('CS', 'CPE')]:
         section = grouped[grouped['DeptPair'] == pair]
-        html += f"<h2>{pair[0]} - {pair[1]} Clashes</h2>"
+        html += f"<h2>{pair[0]} – {pair[1]} Same Level Clashes (300–700)</h2>"
         if not section.empty:
+            html += f"<p style='color:red; font-weight:bold;'>🔴 {len(section)} Violations</p>"
             html += "<table><tr><th>Course A</th><th>Section A</th><th>Course B</th><th>Section B</th><th>Day(s)</th><th>Time</th></tr>"
             for _, row in section.iterrows():
                 html += f"<tr class='{row['RowClass']}'><td>{row['Course A']}</td><td>{row['Section A']}</td><td>{row['Course B']}</td><td>{row['Section B']}</td><td>{row['Day(s)']}</td><td>{row['Time']}</td></tr>"
@@ -270,14 +336,29 @@ def generate_cross_dept_clash_report(df_calendar, output_path="calendar_site/cro
         else:
             html += "<p>No clashes detected for this pair.</p>"
 
+    # 🔴 CSEE 480S / 481S vs All Departments (300-400)
+    html += "<h2>CSEE (480S/481S) - All Departments Clashes (300-400)</h2>"
+    if special_csee_clashes:
+        html += f"<p style='color:red; font-weight:bold;'>🔴 {len(special_csee_clashes)} Violations</p>"
+        html += "<table><tr><th>Course A</th><th>Section A</th><th>Course B</th><th>Section B</th><th>Day(s)</th><th>Time</th></tr>"
+        for row in special_csee_clashes:
+            html += f"<tr class='{row['RowClass']}'><td>{row['Course A']}</td><td>{row['Section A']}</td><td>{row['Course B']}</td><td>{row['Section B']}</td><td>{row['Day(s)']}</td><td>{row['Time']}</td></tr>"
+        html += "</table>"
+    else:
+        html += "<p>No such clashes found.</p>"
+
     html += "</body></html>"
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
 
-    return output_path
-
+    return output_path, {
+        "CSEE_480S_481S": len(special_csee_clashes),
+        "CS-EE": len(grouped[grouped["DeptPair"] == ("CS", "EE")]),
+        "EE-CPE": len(grouped[grouped["DeptPair"] == ("EE", "CPE")]),
+        "CS-CPE": len(grouped[grouped["DeptPair"] == ("CS", "CPE")])
+    }
 
 
 # --------------------------
@@ -322,8 +403,64 @@ if uploaded:
 
 if st.button(":gear: Process Schedule"):
     # Generate reports
-    clash_path = generate_clash_report(df)
-    cross_path = generate_cross_dept_clash_report(df)
+    clash_path, clash_counts = generate_clash_report(df)
+    cross_path, cross_counts = generate_cross_dept_clash_report(df)
+    # 🔢 Count red clashes from main report
+    from bs4 import BeautifulSoup
+    main_red_count = 0
+    wednesday_count = 0
+
+    with open(clash_path, "r", encoding="utf-8") as f:
+        soup = BeautifulSoup(f, "html.parser")
+        main_red_count = len(soup.find_all("tr", class_="red-row"))
+
+        # Count just Wednesday 4–5PM section
+        wed_header = soup.find("h3", string=lambda s: s and "Wednesday 4:00–5:00 PM" in s)
+        if wed_header:
+            table = wed_header.find_next("table")
+            if table:
+                wednesday_count = len(table.find_all("tr")) - 1  # exclude header row
+
+    # 🔢 Count red clashes from cross-department report
+    cross_red_count = {
+        "CSEE 480": 0,
+        "CS-EE": 0,
+        "EE-CPE": 0,
+        "CS-CPE": 0
+    }
+
+    with open(cross_path, "r", encoding="utf-8") as f:
+        soup = BeautifulSoup(f, "html.parser")
+
+        # CSEE 480/481
+        csee_header = soup.find("h2", string=lambda s: s and "CSEE 480S / 481S" in s)
+        if csee_header:
+            table = csee_header.find_next("table")
+            if table:
+                cross_red_count["CSEE 480"] = len(table.find_all("tr")) - 1
+
+        # CS-EE, EE-CPE, CS-CPE
+        for label in ["CS – EE", "EE – CPE", "CS – CPE"]:
+            sec = soup.find("h2", string=lambda s: s and label in s)
+            if sec:
+                table = sec.find_next("table")
+                if table:
+                    count = len(table.find_all("tr")) - 1
+                    if "CS – EE" in label:
+                        cross_red_count["CS-EE"] = count
+                    elif "EE – CPE" in label:
+                        cross_red_count["EE-CPE"] = count
+                    elif "CS – CPE" in label:
+                        cross_red_count["CS-CPE"] = count
+
+    # ✅ Display summary in Streamlit
+    st.markdown("### 🔴 Clash Summary:")
+    st.markdown(f"- Department Wise Clashes: **{clash_counts['non_acceptable']}**")
+    st.markdown(f"- Wednesday 4–5 PM Clashes: **{clash_counts['wednesday_4_5']}**")
+    st.markdown(f"- CSEE (480S/481S) with All Department (300–400) Clashes: **{cross_counts['CSEE_480S_481S']}**")
+    st.markdown(f"- CS – EE Clashes (Same Level): **{cross_counts['CS-EE']}**")
+    st.markdown(f"- EE – CPE Clashes (Same Level): **{cross_counts['EE-CPE']}**")
+    st.markdown(f"- CS – CPE Clashes (Same Level): **{cross_counts['CS-CPE']}**")
 
     # Store file contents in session state to persist after rerun
     if clash_path:
@@ -343,7 +480,7 @@ if st.session_state.get("generated"):
         st.download_button("📑 Download Department Wise Clash Report", data=st.session_state.clash_file, file_name="clash_report.html", mime="text/html")
 
     if "cross_file" in st.session_state:
-        st.download_button("📑 Download Cross Department Clash Report (CS-EE-CPE)", data=st.session_state.cross_file, file_name="cross_report.html", mime="text/html")
+        st.download_button("📑 Download Cross Department Clash Report (CS-EE-CPE-CSEE)", data=st.session_state.cross_file, file_name="cross_report.html", mime="text/html")
     
 
 

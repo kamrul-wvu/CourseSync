@@ -11,35 +11,6 @@ from collections import defaultdict
 days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
 day_lookup = {'M': 'Monday', 'T': 'Tuesday', 'W': 'Wednesday', 'R': 'Thursday', 'F': 'Friday'}
 
-level_colors = {
-    'Freshman': '#A6CEE3',
-    'Sophomore': '#B2DF8A',
-    'Junior': '#FDBF6F',
-    'Senior': '#CAB2D6',
-    'Graduate': '#FB9A99'
-}
-
-legend_html = """
-<div style='margin-bottom:20px;'>
-    <h3 style='margin-bottom:10px;'>Legend</h3>
-    <div style='display:flex; gap:15px; flex-wrap:wrap;'>""" + \
-    "".join([
-        f"<div style='display:flex; align-items:center; gap:6px;'><div style='width:20px; height:20px; background:{color}; border:1px solid #555;'></div>{level}</div>"
-        for level, color in level_colors.items()
-    ]) + \
-    """</div></div>"""
-
-# Elective courses by department
-ELECTIVE_COURSES = {
-    "CPE": {"CPE 453","CPE 520","CPE 521","CPE 536","CPE 538","CPE 664","CPE 684"},
-    "CS": {"CS 450","CS 533","CS 539","CS 555","CS 556","CS 558","CS 568",
-           "CS 572","CS 665","CS 674","CS 676","CS 677","CS 678","CS 757"},
-    "EE": {"EE 435","EE 436","EE 437","EE 455","EE 461","EE 465",
-           "EE 517","EE 528","EE 531","EE 533","EE 535",
-           "EE 561","EE 562","EE 565","EE 567","EE 569",
-           "EE 613","EE 650","EE 668","EE 713","EE 731","EE 733","EE 735"}
-}
-
 # --------------------------
 # Helpers and Rules
 # --------------------------
@@ -66,24 +37,6 @@ def parse_meeting_pattern(pattern):
     if match:
         return pd.Series([match.group(1), match.group(2), match.group(3)])
     return pd.Series([None, None, None])
-
-def get_course_level(num):
-    if pd.isna(num): return 'Unknown'
-    if 100 <= num < 200: return 'Freshman'
-    if 200 <= num < 300: return 'Sophomore'
-    if 300 <= num < 400: return 'Junior'
-    if 400 <= num < 500: return 'Senior'
-    if 500 <= num < 800: return 'Graduate'
-    return 'Unknown'
-
-def violates_custom_rule(r1, r2, rules):
-    for dept, level in rules:
-        if (
-            r1['Department'] == dept and int(r1['Course Number']) // 100 == level // 100 and
-            r2['Department'] == dept and int(r2['Course Number']) // 100 == level // 100
-        ):
-            return True
-    return False
 
 # --------------------------
 # Clash Report Generator
@@ -122,35 +75,31 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
         g['Days'] = g['Days'].apply(lambda x: [day_lookup.get(d, d) for d in x if d in day_lookup])
         g = g.explode('Days').reset_index(drop=True)
 
+        # Clash detection
         for i, row_i in g.iterrows():
             for j, row_j in g.iterrows():
                 if i >= j or row_i['Days'] != row_j['Days']:
                     continue
                 if time_overlap(row_i['StartTimeObj'], row_i['EndTimeObj'],
                                 row_j['StartTimeObj'], row_j['EndTimeObj']):
-                    try:
-                        level_i = extract_course_level(row_i['Course'])
-                        level_j = extract_course_level(row_j['Course'])
-                        if level_i is None or level_j is None:
-                            continue
-                        level_group_i = get_course_level(level_i)
-                        level_group_j = get_course_level(level_j)
-                        levels = sorted([level_i // 100, level_j // 100])
-                        row_class = "red-row" if (levels == [3, 3] or levels == [3, 4] or levels == [4, 4] or
-                                                  levels == [5, 5] or levels == [5, 6] or levels == [6, 6] or
-                                                  levels == [6, 7]) else "green-row"
-
-                        clash_entries.append({
-                            "Department": dept,
-                            "Course A": row_i['Course'], "Section A": row_i['Section #'],
-                            "Course B": row_j['Course'], "Section B": row_j['Section #'],
-                            "Time": f"{row_i['Start Time']}–{row_i['End Time']}",
-                            "Day(s)": row_i['Days'],
-                            "RowClass": row_class
-                        })
-                    except:
+                    level_i = extract_course_level(row_i['Course'])
+                    level_j = extract_course_level(row_j['Course'])
+                    if level_i is None or level_j is None:
                         continue
+                    levels = sorted([level_i // 100, level_j // 100])
+                    row_class = "red-row" if (levels == [3, 3] or levels == [3, 4] or levels == [4, 4] or
+                                              levels == [5, 5] or levels == [5, 6] or levels == [6, 6] or
+                                              levels == [6, 7]) else "green-row"
+                    clash_entries.append({
+                        "Department": dept,
+                        "Course A": row_i['Course'], "Section A": row_i['Section #'],
+                        "Course B": row_j['Course'], "Section B": row_j['Section #'],
+                        "Time": f"{row_i['Start Time']}–{row_i['End Time']}",
+                        "Day(s)": row_i['Days'],
+                        "RowClass": row_class
+                    })
 
+        # Free slot calculation
         for day in days_order:
             g_day = g[g['Days'] == day]
             slots = get_free_slots(g_day, time(9, 0), time(20, 50))
@@ -179,45 +128,45 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
     </style></head><body>
     <h1>Detected Course Clashes</h1>"""
 
-    for dept in df_calendar['Department'].unique():
+    # Ensure CS and EE appear first
+    all_departments = sorted(
+        df_calendar['Department'].dropna().unique(),
+        key=lambda x: (x not in ["CS", "EE"], x)
+    )
+
+    for dept in all_departments:
         html += f"<h2>{dept} Department</h2>"
 
         dept_group = grouped[grouped['Department'] == dept]
 
+        # Free Slot Table
         html += "<h3>📆 Weekly Free Slot Overview (1-Hour Blocks)</h3>"
         html += "<table style='text-align:center; border-collapse:collapse;'><tr><th style='border:1px solid #aaa;'>Time</th>"
         html += "".join(f"<th style='border:1px solid #aaa;'>{day}</th>" for day in days_order)
         html += "</tr>"
 
-        # Generate 1-hour blocks from 9:00 AM to 8:00 PM (last block ends at 9:00 PM)
         hour_slots = []
         t = time(9, 0)
-        while (t.hour * 60 + t.minute) <= (20 * 60):  # includes 8:00 PM slot
+        while (t.hour * 60 + t.minute) <= (20 * 60):  # until 8:00 PM
             end_minutes = (t.hour * 60 + t.minute) + 60
             end_hour, end_min = divmod(end_minutes, 60)
             end = time(end_hour, end_min)
             hour_slots.append((t, end))
             t = end
 
-        # Fill calendar table
         for s, e in hour_slots:
             html += f"<tr><td style='border:1px solid #aaa;'>{s.strftime('%I:%M %p')}–{e.strftime('%I:%M %p')}</td>"
             for day in days_order:
                 slot_found = any(
                     (fs <= s and fe >= e) or
-                    (
-                    s == time(20, 0) and  # 8:00 PM slot
-                    (fe.hour * 60 + fe.minute) - (fs.hour * 60 + fs.minute) >= 50 and
-                    fs <= s and fe >= s  # partially overlaps starting from 8:00 PM
-                    )
+                    (s == time(20, 0) and (fe.hour * 60 + fe.minute) - (fs.hour * 60 + fs.minute) >= 50 and fs <= s and fe >= s)
                     for fs, fe in free_slots_by_dept[dept][day]
                 )
-
                 html += f"<td style='border:1px solid #aaa; color:{'green' if slot_found else '#bbb'};'>{'✅' if slot_found else '—'}</td>"
             html += "</tr>"
-
         html += "</table>"
 
+        # Clashes
         for label, color in [('Non-Acceptable Clashes', 'red-row'), ('Acceptable Clashes', 'green-row')]:
             section = dept_group[dept_group['RowClass'] == color]
             html += f"<h3>{label}</h3>"
@@ -229,7 +178,6 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
             else:
                 html += "<p>No clashes in this category.</p>"
 
-
     html += "</body></html>"
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -238,236 +186,62 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
 
     return output_path
 
-# --------------------------
-# HTML Generator for Calendars & Suggested Schedules
-# --------------------------
-def generate_html_site(df_calendar, output_path, rules=[]):
-    os.makedirs(output_path, exist_ok=True)
-
-    df['StartTimeObj'] = df['Start Time'].apply(to_datetime_time_safe)
-    df['EndTimeObj'] = df['End Time'].apply(to_datetime_time_safe)
-    df_calendar['Level Color'] = df_calendar['Course Level'].map(level_colors)
-    df_calendar.dropna(subset=['StartTimeObj', 'EndTimeObj'], inplace=True)
-
-    dept_files = {}
-    # generate individual dept calendars
-    for dept, group in df_calendar.groupby('Department'):
-        g = group.copy()
-        g['Days'] = g['Days'].apply(lambda x: [day_lookup[d] for d in x if d in day_lookup])
-        g = g.explode('Days').reset_index(drop=True)
-
-        g['Clash'] = False
-        g['Clash Details'] = ""
-        for i, row_i in g.iterrows():
-            for j, row_j in g.iterrows():
-                if i >= j or row_i['Days'] != row_j['Days']:
-                    continue
-                if time_overlap(row_i['StartTimeObj'], row_i['EndTimeObj'], row_j['StartTimeObj'], row_j['EndTimeObj']):
-                    g.at[i, 'Clash'] = True
-                    g.at[j, 'Clash'] = True
-                    g.at[i, 'Clash Details'] += f"Clashes with {row_j['Course']} ({row_j['Course Level']}) {row_j['Start Time']}-{row_j['End Time']}; "
-                    g.at[j, 'Clash Details'] += f"Clashes with {row_i['Course']} ({row_i['Course Level']}) {row_i['Start Time']}-{row_i['End Time']}; "
-
-        # existing elective-dept rule
-        if st.session_state.get("elective_depts"):
-            for ed in st.session_state.elective_depts:
-                for i, row_i in g.iterrows():
-                    for j, row_j in g.iterrows():
-                        if i >= j or row_i['Days'] != row_j['Days']:
-                            continue
-                        course_i = f"{row_i['Department']} {int(row_i['Course Number'])}"
-                        course_j = f"{row_j['Department']} {int(row_j['Course Number'])}"
-                        if row_i['Department']==ed and row_j['Department']==ed and course_i in ELECTIVE_COURSES[ed] and course_j in ELECTIVE_COURSES[ed]:
-                            g.at[i, 'Clash'] = True
-                            g.at[j, 'Clash'] = True
-                            g.at[i, 'Clash Details'] += f"Violates elective-dept rule with {course_j}; "
-                            g.at[j, 'Clash Details'] += f"Violates elective-dept rule with {course_i}; "
-
-        html = f"""<html><head><title>{dept} Calendar</title><style>
-        body {{ font-family: Arial; background: #f9f9f9; padding: 20px; }}
-        h1 {{ text-align: center; color: #002855; }}
-        .calendar {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }}
-        .day-column {{ padding: 10px; background: #fff; border-radius: 8px; border: 1px solid #ccc; }}
-        .event {{ margin: 10px 0; padding: 10px; border-radius: 5px; border-left: 4px solid #333; }}
-        .clash {{ background-color: #ffcccc; border-left: 4px solid red; }}
-        .event-time {{ font-weight: bold; }}
-        a.back-link {{ display:inline-block; margin-bottom:20px; text-decoration:none; font-size:16px; color:#004B87; }}
-        </style></head><body>
-        <a href="calendar_directory.html" class="back-link">← Back to Directory</a>
-        <h1>{dept} Course Calendar</h1>
-        {legend_html}
-        <div class='calendar'>"""
-
-        for day in days_order:
-            html += f"<div class='day-column'><h3>{day}</h3>"
-            for _, row in g[g['Days'] == day].sort_values('StartTimeObj').iterrows():
-                style_class = "event clash" if row['Clash'] else "event"
-                html += f"<div class='{style_class}' style='background-color:{row['Level Color']}'>"
-                html += f"<div class='event-time'>{row['Start Time']} - {row['End Time']}</div>"
-                html += f"{row['Course']} - {row['Course Title']} <br> Level: ({row['Course Level']})<br>Section: {row['Section #']}" 
-                if row['Clash']:
-                    html += f"<div class='clash-note'>{row['Clash Details']}</div>"
-                html += "</div>"
-            html += "</div>"
-        html += "</div></body></html>"
-
-        fname = f"{dept}_calendar.html"
-        with open(os.path.join(output_path, fname), "w", encoding="utf-8") as f:
-            f.write(html)
-        dept_files[dept] = fname
-
-    # Suggested Schedules Page
-    with open(os.path.join(output_path, "suggested_schedules.html"), "w", encoding="utf-8") as f:
-        f.write(f"""
-        <html><head><title>Suggested Optimal Schedules</title><style>
-        body {{ font-family: Arial; padding: 20px; background: #f9f9f9; }}
-        h1 {{ text-align: center; color: #002855; }}
-        h2 {{ margin-top: 40px; color: #003366; }}
-        .calendar {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 40px; }}
-        .day-column {{ padding: 10px; background: #fff; border-radius: 8px; border: 1px solid #ccc; }}
-        .event {{ margin: 10px 0; padding: 10px; border-radius: 5px; border-left: 4px solid #333; }}
-        a.back-link {{ display:inline-block; margin-bottom:20px; text-decoration:none; font-size:16px; color:#004B87; }}
-        </style></head><body>
-        <a href="calendar_directory.html" class="back-link">← Back to Directory</a>
-        <h1>Suggested Optimal Schedules</h1>
-        {legend_html}
-        """
-        )
-
-        for dept, group in df_calendar.groupby('Department'):
-            g = group.copy()
-            g['Days'] = g['Days'].apply(lambda x: [day_lookup[d] for d in x if d in day_lookup])
-            g = g.explode('Days').reset_index(drop=True)
-
-            keep = []
-            for i, row_i in g.iterrows():
-                conflict = False
-                for j, row_j in g.iterrows():
-                    if i >= j or row_i['Days'] != row_j['Days']:
-                        continue
-                    if time_overlap(row_i['StartTimeObj'], row_i['EndTimeObj'], row_j['StartTimeObj'], row_j['EndTimeObj']):
-                        # existing level-based rule
-                        if violates_custom_rule(row_i, row_j, rules):
-                            conflict = True
-                            break
-                        # existing non-clash-pairs rule
-                        for pair in st.session_state.get("non_clash_pairs", []):
-                            course_i = f"{row_i['Department']} {int(row_i['Course Number'])}"
-                            course_j = f"{row_j['Department']} {int(row_j['Course Number'])}"
-                            if (course_i, course_j) in [pair, pair[::-1]]:
-                                conflict = True
-                                break
-                        if conflict:
-                            break
-                        # elective-dept rule
-                        for ed in st.session_state.get("elective_depts", []):
-                            ci = f"{row_i['Department']} {int(row_i['Course Number'])}"
-                            cj = f"{row_j['Department']} {int(row_j['Course Number'])}"
-                            if (row_i['Department']==ed and row_j['Department']==ed and
-                                ci in ELECTIVE_COURSES[ed] and cj in ELECTIVE_COURSES[ed]):
-                                conflict = True
-                                break
-                        if conflict:
-                            break
-                        # cross-department elective rule
-                        for d1, d2 in st.session_state.get("cross_elective_pairs", []):
-                            ci = f"{row_i['Department']} {int(row_i['Course Number'])}"
-                            cj = f"{row_j['Department']} {int(row_j['Course Number'])}"
-                            if ((row_i['Department'], row_j['Department']) == (d1, d2) or (row_i['Department'], row_j['Department']) == (d2, d1)):
-                                if ci in ELECTIVE_COURSES.get(row_i['Department'], []) and cj in ELECTIVE_COURSES.get(row_j['Department'], []):
-                                    conflict = True
-                                    break
-                        if conflict:
-                            break
-                if not conflict:
-                    keep.append(i)
-            g = g.loc[keep]
-
-            f.write(f"<h2>{dept}</h2><div class='calendar'>")
-            for day in days_order:
-                f.write(f"<div class='day-column'><h4>{day}</h4>")
-                for _, row in g[g['Days'] == day].sort_values('StartTimeObj').iterrows():
-                    f.write(f"<div class='event' style='background:{row['Level Color']}'>"
-                            f"<strong>{row['Start Time']} - {row['End Time']}</strong><br>"
-                            f"{row['Course']} - {row['Course Title']} ({row['Course Level']})<br>"
-                            f"Room: {row['Room']} | Section: {row['Section #']}</div>")
-                f.write("</div>")
-            f.write("</div>")
-        f.write("</body></html>")
-
-    # Directory Page
-    with open(os.path.join(output_path, "calendar_directory.html"), "w", encoding="utf-8") as f:
-        f.write("""<!DOCTYPE html><html><head><title>WVU Department Calendars</title><style>
-        body { font-family: 'Segoe UI', sans-serif; padding: 40px 20px; background: #f8f9fa; color: #002855; }
-        h1 { text-align: center; font-size: 2.5em; margin-bottom: 30px; }
-        .section-title { font-size: 1.8em; margin: 50px 0 20px; text-align: center; }
-        .grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 24px; }
-        .card {
-            background: #fff; border-radius: 12px; padding: 20px; width: 240px; text-align: center;
-            text-decoration: none; color: #002855;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.08); border: 1px solid #EAAA00;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-        .card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 16px rgba(0,0,0,0.1);
-            background: #fffbe6;
-        }
-        </style></head><body>
-        <h1>LCSEE Department Calendars</h1>
-        <div class='section-title'>Based on the uploaded file</div><div class='grid'>"""
-        )
-        for dept, fname in dept_files.items():
-            f.write(f'<a class="card" href="{fname}" target="_blank">{dept}</a>')
-#        f.write("""</div><div class='section-title'>Suggested</div>
-#        <div class='grid'><a class='card' href='suggested_schedules.html' target='_blank'>Optimal Schedule</a></div>
-#        </body></html>"""
-#        )
-
-    return os.path.abspath(os.path.join(output_path, "calendar_directory.html"))
 
 # --------------------------
 # Streamlit App UI
 # --------------------------
 st.image("logo.png", width=150)
 st.title("CourseSync")
-st.markdown("##### Course Calendar Generator")
 st.markdown("##### West Virginia University")
 st.markdown("<br>", unsafe_allow_html=True)
-uploaded = st.file_uploader("Upload Excel file: Must include the following columns: Course, Section #, Course Title, Meeting Pattern, room", type=['xlsx'])
+
+st.markdown("### 📝 Notes")
+st.markdown("""
+- Upload file in Excel or CSV format only.
+- Uploaded file must include the following columns: Course, Section #, Course Title, Meeting Pattern.
+- Only courses that follow standard meeting patterns (day, time) are included.
+- Once generated, click on download clash report and open the file on a browser.
+- Red marked clashes are between 300 - 300, 300 - 400, 500 - 500, 500 - 600, 600 - 600, 600 -700 levels.
+- Green marked clashes are less important.
+- Free slots shown are 1 hour each, from 9 AM to 9 PM on weekdays.
+""")
+
+uploaded = st.file_uploader("Upload Course Schedule (Excel or CSV)", type=['xlsx', 'csv'])
+
 if uploaded:
-    df = pd.read_excel(uploaded)
+    try:
+        if uploaded.name.endswith('.csv'):
+            df = pd.read_csv(uploaded)
+        else:
+            df = pd.read_excel(uploaded, engine='openpyxl')  # ✅ specify engine
+    except Exception as e:
+        st.error(f"Error reading file: {e}")
+        st.stop()
+
     df[['Days', 'Start Time', 'End Time']] = df['Meeting Pattern'].apply(parse_meeting_pattern)
     df['Course Number'] = df['Course'].str.extract(r'(\d{3})').astype(float)
     df['Department'] = df['Course'].str.extract(r'^([A-Z]+)')
-    df['Course Level'] = df['Course Number'].apply(get_course_level)
-    df = df[df['Course Level'] != 'Unknown']
     df.reset_index(drop=True, inplace=True)
 
 
 if st.button(":gear: Process Schedule"):
-    site_path = generate_html_site(df, "calendar_site")
-    clash_path = generate_clash_report(df)
-
-    # Save paths in session state
-    st.session_state.calendar_path = os.path.join("calendar_site", "calendar_directory.html")
-    st.session_state.clash_path = clash_path
-    st.session_state.generated = True
-
-    st.success("Calendar and Clash Report generated!")
-
-if st.session_state.get("generated", False):
 
     clash_path = generate_clash_report(df)
     if clash_path:
         with open(clash_path, "rb") as f:
-            st.download_button("📑 Download Clash Report HTML", data=f.read(), file_name="clash_report.html", mime="text/html")
+            st.download_button("📑 Download Clash Report", data=f.read(), file_name="clash_report.html", mime="text/html")
+    # Save paths in session state
+    st.session_state.clash_path = clash_path
+    st.session_state.generated = True
+
+    st.success("Clash Report generated!")
+    
 
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("""
     <div style="position: center; bottom: 0; width: 100%; text-align: center; padding: 10px;">
-        <p style="font-size: 12px; color: #FFF;">Queries: kamrul.hasan@mail.wvu.edu</p>
-	<p style="font-size: 12px; color: #FFF;">Version: 1.3</p>
+        <p style="font-size: 12px; color: #FFF;">Queries: kamrul.hasan@mail.wvu.edu | 304 685 8910</p>
+	<p style="font-size: 12px; color: #FFF;">Version: 1.0</p>
     </div>
     """, unsafe_allow_html=True)

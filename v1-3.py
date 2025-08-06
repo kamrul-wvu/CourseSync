@@ -446,112 +446,23 @@ if uploaded:
 
 
 if st.button(":gear: Process Schedule"):
-    site_path = generate_html_site(df, "calendar_site", st.session_state.rule_list)
+    site_path = generate_html_site(df, "calendar_site")
     clash_path = generate_clash_report(df)
 
-    # Save the URLs in session state so buttons remain after rerun
-    st.session_state.calendar_url = "file://" + os.path.abspath(os.path.join("calendar_site", "calendar_directory.html"))
-    st.session_state.clash_url = "file://" + os.path.abspath(clash_path)
-    st.session_state.generated = True  # flag to show buttons
+    # Save paths in session state
+    st.session_state.calendar_path = os.path.join("calendar_site", "calendar_directory.html")
+    st.session_state.clash_path = clash_path
+    st.session_state.generated = True
 
     st.success("Calendar and Clash Report generated!")
 
-# Show buttons if already generated
 if st.session_state.get("generated", False):
-    if st.button(":calendar: Open Calendar Directory"):
-        webbrowser.open_new_tab(st.session_state.calendar_url)
 
-    if st.button(":receipt: Open Clash Report"):
-        webbrowser.open_new_tab(st.session_state.clash_url)
+    clash_path = generate_clash_report(df)
+    if clash_path:
+        with open(clash_path, "rb") as f:
+            st.download_button("📑 Download Clash Report HTML", data=f.read(), file_name="clash_report.html", mime="text/html")
 
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-st.markdown("###### Optional Rules for Scheduling:")
-
-# Rule 01: Prevent overlapping same‐hundreds‐level courses in one dept
-st.markdown("**Rule 01:** Courses of the same level within a department should not overlap")
-with st.form("rule_form"):
-    col1, col2 = st.columns(2)
-    with col1:
-        d1 = st.text_input("Department", placeholder="CS, EE, CPE")
-    with col2:
-        l1 = st.selectbox("Level (hundreds)", [100,200,300,400,500,600,700])
-    add1 = st.form_submit_button("➕ Add Level Rule")
-
-st.session_state.setdefault("rule_list", [])
-if add1 and d1 and l1:
-    st.session_state.rule_list.append((d1.upper(), l1))
-if st.session_state.rule_list:
-    st.markdown("**Active Level Rules:**")
-    for i,(dep,lev) in enumerate(st.session_state.rule_list):
-        cols=st.columns([8,1])
-        with cols[0]:
-            st.write(f"• No {dep} {lev}-level overlap")
-        with cols[1]:
-            if st.button("🗑️", key=f"rm1_{i}"):
-                st.session_state.rule_list.pop(i); st.rerun()
-
-# Rule 02: Specific course pairs must not clash
-st.markdown("**Rule 02:** These specific course pairs must not overlap")
-with st.form("non_clash_form"):
-    ca = st.text_input("Course A", placeholder="e.g. CS 330")
-    cb = st.text_input("Course B", placeholder="e.g. CS 230")
-    add2 = st.form_submit_button("➕ Add Pair")
-
-st.session_state.setdefault("non_clash_pairs", [])
-if add2 and ca and cb:
-    st.session_state.non_clash_pairs.append((ca.upper(), cb.upper()))
-if st.session_state.non_clash_pairs:
-    st.markdown("**Active Pairs:**")
-    for i,(a,b) in enumerate(st.session_state.non_clash_pairs):
-        cols=st.columns([8,1])
-        with cols[0]:
-            st.write(f"• {a} should not overlap with {b}")
-        with cols[1]:
-            if st.button("🗑️", key=f"rm2_{i}"):
-                st.session_state.non_clash_pairs.pop(i); st.rerun()
-
-# Rule 03: Electives within one dept must not clash
-st.markdown("**Rule 03:** No two electives in the same department should overlap")
-with st.form("elective_dept_form"):
-    d3 = st.selectbox("Department", ["CPE","CS","EE"])
-    add3 = st.form_submit_button("➕ Add Elective-Dept Rule")
-
-st.session_state.setdefault("elective_depts", [])
-if add3:
-    st.session_state.elective_depts.append(d3)
-if st.session_state.elective_depts:
-    st.markdown("**Active Elective-Dept Rules:**")
-    for i,dep in enumerate(st.session_state.elective_depts):
-        cols=st.columns([8,1])
-        with cols[0]:
-            st.write(f"• Electives in {dep} should not overlap")
-        with cols[1]:
-            if st.button("🗑️", key=f"rm3_{i}"):
-                st.session_state.elective_depts.pop(i); st.rerun()
-
-# Rule 04: Electives across two depts must not clash
-st.markdown("**Rule 04:** Electives in these departments must not overlap")
-with st.form("cross_elective_form"):
-    d4a = st.selectbox("Department A", ["CPE","CS","EE"], key="d4a")
-    d4b = st.selectbox("Department B", ["CPE","CS","EE"], key="d4b")
-    add4 = st.form_submit_button("➕ Add Cross-Elective Rule")
-
-st.session_state.setdefault("cross_elective_pairs", [])
-if add4 and d4a and d4b and d4a!=d4b:
-    pair = tuple(sorted((d4a, d4b)))
-    if pair not in st.session_state.cross_elective_pairs:
-        st.session_state.cross_elective_pairs.append(pair)
-if st.session_state.cross_elective_pairs:
-    st.markdown("**Active Cross-Elective Rules:**")
-    for i,(x,y) in enumerate(st.session_state.cross_elective_pairs):
-        cols=st.columns([8,1])
-        with cols[0]:
-            st.write(f"• Electives in {x} should not clash with electives in {y}")
-        with cols[1]:
-            if st.button("🗑️", key=f"rm4_{i}"):
-                st.session_state.cross_elective_pairs.pop(i); st.rerun()
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("""

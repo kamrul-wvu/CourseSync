@@ -298,6 +298,8 @@ st.markdown("""
 - Red marked clashes are between 300 - 300, 300 - 400, 500 - 500, 500 - 600, 600 - 600, 600 -700 levels.
 - Green marked clashes are less important.
 - Free slots shown are 1 hour each, from 9 AM to 9 PM on weekdays.
+- For cross department clash report, only same level (300 and Above) clashes are shown.             
+
 """)
 
 uploaded = st.file_uploader("Upload Course Schedule (Excel or CSV)", type=['xlsx', 'csv'])

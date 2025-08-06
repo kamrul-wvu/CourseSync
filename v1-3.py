@@ -3,7 +3,9 @@ import pandas as pd
 import os
 import re
 from datetime import datetime
+from datetime import datetime, time
 import webbrowser
+from collections import defaultdict
 
 # Constants
 days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
@@ -41,21 +43,29 @@ ELECTIVE_COURSES = {
 # --------------------------
 # Helpers and Rules
 # --------------------------
-def parse_meeting_pattern(pattern):
-    match = re.match(r"([MTWRF]+)\s+(\d{1,2}(?::\d{2})?[ap]m)-(\d{1,2}(?::\d{2})?[ap]m)", str(pattern), re.IGNORECASE)
-    if match:
-        return pd.Series([*match.groups()])
-    return pd.Series([None, None, None])
 
 def to_datetime_time_safe(time_str):
     if pd.isna(time_str): return None
-    try:
-        return datetime.strptime(time_str.strip(), '%I:%M%p').time()
-    except ValueError:
-        return datetime.strptime(time_str.strip(), '%I%p').time()
+    time_str = str(time_str).strip().lower().replace(" ", "")
+    for fmt in ['%I:%M%p', '%I%p']:
+        try:
+            return datetime.strptime(time_str, fmt).time()
+        except ValueError:
+            continue
+    return None
+
+def extract_course_level(course_str):
+    match = re.search(r'\b(\d{3})[A-Z]?\b', str(course_str))
+    return int(match.group(1)) if match else None
 
 def time_overlap(start1, end1, start2, end2):
     return max(start1, start2) < min(end1, end2)
+
+def parse_meeting_pattern(pattern):
+    match = re.match(r"([MTWRF]+)\s+(\d{1,2}(?::\d{2})?[ap]m)-(\d{1,2}(?::\d{2})?[ap]m)", str(pattern).strip(), re.IGNORECASE)
+    if match:
+        return pd.Series([match.group(1), match.group(2), match.group(3)])
+    return pd.Series([None, None, None])
 
 def get_course_level(num):
     if pd.isna(num): return 'Unknown'
@@ -78,45 +88,84 @@ def violates_custom_rule(r1, r2, rules):
 # --------------------------
 # Clash Report Generator
 # --------------------------
+
+def get_free_slots(df_dept_day, start_bound, end_bound):
+    busy = sorted([(r['StartTimeObj'], r['EndTimeObj']) for _, r in df_dept_day.iterrows()])
+    free = []
+    current = start_bound
+
+    for b_start, b_end in busy:
+        if b_start > current:
+            free.append((current, b_start))
+        current = max(current, b_end)
+
+    if current < end_bound:
+        free.append((current, end_bound))
+
+    return [
+        (s, e) for s, e in free
+        if (e.hour * 60 + e.minute) - (s.hour * 60 + s.minute) >= 50
+    ]
+
 def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.html"):
+    df_calendar[['Days', 'Start Time', 'End Time']] = df_calendar['Meeting Pattern'].apply(parse_meeting_pattern)
     df_calendar['StartTimeObj'] = df_calendar['Start Time'].apply(to_datetime_time_safe)
     df_calendar['EndTimeObj'] = df_calendar['End Time'].apply(to_datetime_time_safe)
+    df_calendar['Department'] = df_calendar['Course'].str.extract(r'^([A-Z]+)')
     df_calendar.dropna(subset=['StartTimeObj', 'EndTimeObj'], inplace=True)
 
     clash_entries = []
+    free_slots_by_dept = defaultdict(lambda: defaultdict(list))
 
-    # existing dept-based clashes
     for dept, group in df_calendar.groupby('Department'):
         g = group.copy()
-        g['Days'] = g['Days'].apply(lambda x: [day_lookup[d] for d in x if d in day_lookup])
+        g['Days'] = g['Days'].apply(lambda x: [day_lookup.get(d, d) for d in x if d in day_lookup])
         g = g.explode('Days').reset_index(drop=True)
 
         for i, row_i in g.iterrows():
             for j, row_j in g.iterrows():
                 if i >= j or row_i['Days'] != row_j['Days']:
                     continue
-                if time_overlap(row_i['StartTimeObj'], row_i['EndTimeObj'], row_j['StartTimeObj'], row_j['EndTimeObj']):
-                    clash_entries.append({
-                        "Department": dept,
-                        "Course A": row_i['Course'], "Section A": row_i['Section #'],
-                        "Course B": row_j['Course'], "Section B": row_j['Section #'],
-                        "Time": f"{row_i['Start Time']}–{row_i['End Time']}",
-                        "Day(s)": row_i['Days']
-                    })
+                if time_overlap(row_i['StartTimeObj'], row_i['EndTimeObj'],
+                                row_j['StartTimeObj'], row_j['EndTimeObj']):
+                    try:
+                        level_i = extract_course_level(row_i['Course'])
+                        level_j = extract_course_level(row_j['Course'])
+                        if level_i is None or level_j is None:
+                            continue
+                        level_group_i = get_course_level(level_i)
+                        level_group_j = get_course_level(level_j)
+                        levels = sorted([level_i // 100, level_j // 100])
+                        row_class = "red-row" if (levels == [3, 3] or levels == [3, 4] or levels == [4, 4] or
+                                                  levels == [5, 5] or levels == [5, 6] or levels == [6, 6] or
+                                                  levels == [6, 7]) else "green-row"
 
-    if not clash_entries:
-        return None
+                        clash_entries.append({
+                            "Department": dept,
+                            "Course A": row_i['Course'], "Section A": row_i['Section #'],
+                            "Course B": row_j['Course'], "Section B": row_j['Section #'],
+                            "Time": f"{row_i['Start Time']}–{row_i['End Time']}",
+                            "Day(s)": row_i['Days'],
+                            "RowClass": row_class
+                        })
+                    except:
+                        continue
+
+        for day in days_order:
+            g_day = g[g['Days'] == day]
+            slots = get_free_slots(g_day, time(9, 0), time(20, 50))
+            free_slots_by_dept[dept][day] = slots
 
     df_clashes = pd.DataFrame(clash_entries)
     grouped = (
         df_clashes.groupby(
-            ["Department", "Course A", "Section A", "Course B", "Section B", "Time"]
+            ["Department", "Course A", "Section A", "Course B", "Section B", "Time", "RowClass"]
         )['Day(s)']
         .apply(lambda x: ", ".join(sorted(set(x))))
         .reset_index()
+        if not df_clashes.empty else pd.DataFrame(columns=["Department", "Course A", "Section A", "Course B", "Section B", "Time", "Day(s)", "RowClass"])
     )
 
-    # HTML Generation
     html = """<html><head><title>Course Clashes</title><style>
         body { font-family: Arial; padding: 20px; background: #f9f9f9; }
         h1 { text-align: center; color: #002855; }
@@ -125,19 +174,68 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
         th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ccc; }
         th { background-color: #004B87; color: white; }
         tr:nth-child(even) { background-color: #f2f2f2; }
+        .red-row { background-color: #ffdddd !important; }
+        .green-row { background-color: #ddffdd !important; }
     </style></head><body>
     <h1>Detected Course Clashes</h1>"""
 
-    for dept, group in grouped.groupby("Department"):
-        html += f"<h2>{dept} Department Clashes</h2><table><tr><th>Course A</th><th>Section A</th><th>Course B</th><th>Section B</th><th>Day(s)</th><th>Time</th></tr>"
-        for _, row in group.iterrows():
-            html += f"<tr><td>{row['Course A']}</td><td>{row['Section A']}</td><td>{row['Course B']}</td><td>{row['Section B']}</td><td>{row['Day(s)']}</td><td>{row['Time']}</td></tr>"
+    for dept in df_calendar['Department'].unique():
+        html += f"<h2>{dept} Department</h2>"
+
+        dept_group = grouped[grouped['Department'] == dept]
+
+        html += "<h3>📆 Weekly Free Slot Overview (1-Hour Blocks)</h3>"
+        html += "<table style='text-align:center; border-collapse:collapse;'><tr><th style='border:1px solid #aaa;'>Time</th>"
+        html += "".join(f"<th style='border:1px solid #aaa;'>{day}</th>" for day in days_order)
+        html += "</tr>"
+
+        # Generate 1-hour blocks from 9:00 AM to 8:00 PM (last block ends at 9:00 PM)
+        hour_slots = []
+        t = time(9, 0)
+        while (t.hour * 60 + t.minute) <= (20 * 60):  # includes 8:00 PM slot
+            end_minutes = (t.hour * 60 + t.minute) + 60
+            end_hour, end_min = divmod(end_minutes, 60)
+            end = time(end_hour, end_min)
+            hour_slots.append((t, end))
+            t = end
+
+        # Fill calendar table
+        for s, e in hour_slots:
+            html += f"<tr><td style='border:1px solid #aaa;'>{s.strftime('%I:%M %p')}–{e.strftime('%I:%M %p')}</td>"
+            for day in days_order:
+                slot_found = any(
+                    (fs <= s and fe >= e) or
+                    (
+                    s == time(20, 0) and  # 8:00 PM slot
+                    (fe.hour * 60 + fe.minute) - (fs.hour * 60 + fs.minute) >= 50 and
+                    fs <= s and fe >= s  # partially overlaps starting from 8:00 PM
+                    )
+                    for fs, fe in free_slots_by_dept[dept][day]
+                )
+
+                html += f"<td style='border:1px solid #aaa; color:{'green' if slot_found else '#bbb'};'>{'✅' if slot_found else '—'}</td>"
+            html += "</tr>"
+
         html += "</table>"
+
+        for label, color in [('Non-Acceptable Clashes', 'red-row'), ('Acceptable Clashes', 'green-row')]:
+            section = dept_group[dept_group['RowClass'] == color]
+            html += f"<h3>{label}</h3>"
+            if not section.empty:
+                html += "<table><tr><th>Course A</th><th>Section A</th><th>Course B</th><th>Section B</th><th>Day(s)</th><th>Time</th></tr>"
+                for _, row in section.iterrows():
+                    html += f"<tr class='{row['RowClass']}'><td>{row['Course A']}</td><td>{row['Section A']}</td><td>{row['Course B']}</td><td>{row['Section B']}</td><td>{row['Day(s)']}</td><td>{row['Time']}</td></tr>"
+                html += "</table>"
+            else:
+                html += "<p>No clashes in this category.</p>"
+
+
     html += "</body></html>"
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
+
     return output_path
 
 # --------------------------
@@ -146,8 +244,8 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
 def generate_html_site(df_calendar, output_path, rules=[]):
     os.makedirs(output_path, exist_ok=True)
 
-    df_calendar['StartTimeObj'] = df_calendar['Start Time'].apply(to_datetime_time_safe)
-    df_calendar['EndTimeObj'] = df_calendar['End Time'].apply(to_datetime_time_safe)
+    df['StartTimeObj'] = df['Start Time'].apply(to_datetime_time_safe)
+    df['EndTimeObj'] = df['End Time'].apply(to_datetime_time_safe)
     df_calendar['Level Color'] = df_calendar['Course Level'].map(level_colors)
     df_calendar.dropna(subset=['StartTimeObj', 'EndTimeObj'], inplace=True)
 
@@ -206,7 +304,7 @@ def generate_html_site(df_calendar, output_path, rules=[]):
                 style_class = "event clash" if row['Clash'] else "event"
                 html += f"<div class='{style_class}' style='background-color:{row['Level Color']}'>"
                 html += f"<div class='event-time'>{row['Start Time']} - {row['End Time']}</div>"
-                html += f"{row['Course']} - {row['Course Title']} ({row['Course Level']})<br>Room: {row['Room']}<br>Section: {row['Section #']}" 
+                html += f"{row['Course']} - {row['Course Title']} <br> Level: ({row['Course Level']})<br>Section: {row['Section #']}" 
                 if row['Clash']:
                     html += f"<div class='clash-note'>{row['Clash Details']}</div>"
                 html += "</div>"
@@ -321,10 +419,10 @@ def generate_html_site(df_calendar, output_path, rules=[]):
         )
         for dept, fname in dept_files.items():
             f.write(f'<a class="card" href="{fname}" target="_blank">{dept}</a>')
-        f.write("""</div><div class='section-title'>Suggested</div>
-        <div class='grid'><a class='card' href='suggested_schedules.html' target='_blank'>Optimal Schedule</a></div>
-        </body></html>"""
-        )
+#        f.write("""</div><div class='section-title'>Suggested</div>
+#        <div class='grid'><a class='card' href='suggested_schedules.html' target='_blank'>Optimal Schedule</a></div>
+#        </body></html>"""
+#        )
 
     return os.path.abspath(os.path.join(output_path, "calendar_directory.html"))
 
@@ -346,20 +444,26 @@ if uploaded:
     df = df[df['Course Level'] != 'Unknown']
     df.reset_index(drop=True, inplace=True)
 
-if st.button("Generate and View Calendars"):
+
+if st.button(":gear: Process Schedule"):
     site_path = generate_html_site(df, "calendar_site", st.session_state.rule_list)
-    st.success("Calendar generated!")
-
-    suggested_path = os.path.join("calendar_site", "suggested_schedules.html")
-    with open(suggested_path, "rb") as f:
-        st.download_button("⬇️ Download Optimal Schedule HTML", data=f.read(), file_name="suggested_schedules.html", mime="text/html")
-
     clash_path = generate_clash_report(df)
-    if clash_path:
-        with open(clash_path, "rb") as f:
-            st.download_button("⬇️ Download Clash Report HTML", data=f.read(), file_name="clash_report.html", mime="text/html")
 
-    webbrowser.open(f"file://{site_path}")
+    # Save the URLs in session state so buttons remain after rerun
+    st.session_state.calendar_url = "file://" + os.path.abspath(os.path.join("calendar_site", "calendar_directory.html"))
+    st.session_state.clash_url = "file://" + os.path.abspath(clash_path)
+    st.session_state.generated = True  # flag to show buttons
+
+    st.success("Calendar and Clash Report generated!")
+
+# Show buttons if already generated
+if st.session_state.get("generated", False):
+    if st.button(":calendar: Open Calendar Directory"):
+        webbrowser.open_new_tab(st.session_state.calendar_url)
+
+    if st.button(":receipt: Open Clash Report"):
+        webbrowser.open_new_tab(st.session_state.clash_url)
+
 
 st.markdown("<br>", unsafe_allow_html=True)
 

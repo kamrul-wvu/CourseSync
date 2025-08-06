@@ -193,6 +193,92 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
 
     return output_path
 
+def generate_cross_dept_clash_report(df_calendar, output_path="calendar_site/cross_report.html"):
+    df_calendar[['Days', 'Start Time', 'End Time']] = df_calendar['Meeting Pattern'].apply(parse_meeting_pattern)
+    df_calendar['StartTimeObj'] = df_calendar['Start Time'].apply(to_datetime_time_safe)
+    df_calendar['EndTimeObj'] = df_calendar['End Time'].apply(to_datetime_time_safe)
+    df_calendar['Department'] = df_calendar['Course'].str.extract(r'^([A-Z]+)')
+    df_calendar.dropna(subset=['StartTimeObj', 'EndTimeObj'], inplace=True)
+
+    g = df_calendar.copy()
+    g['Days'] = g['Days'].apply(lambda x: [day_lookup.get(d, d) for d in x if d in day_lookup])
+    g = g.explode('Days').reset_index(drop=True)
+
+    valid_depts = ["CS", "EE", "CPE"]
+    clash_entries = []
+
+    for i, row_i in g.iterrows():
+        for j, row_j in g.iterrows():
+            if i >= j or row_i['Days'] != row_j['Days']:
+                continue
+
+            dept_i, dept_j = row_i['Department'], row_j['Department']
+            if dept_i not in valid_depts or dept_j not in valid_depts or dept_i == dept_j:
+                continue
+
+            if time_overlap(row_i['StartTimeObj'], row_i['EndTimeObj'], row_j['StartTimeObj'], row_j['EndTimeObj']):
+                level_i = extract_course_level(row_i['Course'])
+                level_j = extract_course_level(row_j['Course'])
+                if level_i is None or level_j is None:
+                    continue
+
+                level_group_i = level_i // 100
+                level_group_j = level_j // 100
+
+                # Check red clash between same levels 300–700
+                if 3 <= level_group_i <= 7 and level_group_i == level_group_j:
+                    dept_pair = tuple(sorted([dept_i, dept_j]))
+                    if dept_pair in [("CS", "EE"), ("CS", "CPE"), ("EE", "CPE")]:
+                        clash_entries.append({
+                            "DeptPair": dept_pair,
+                            "Course A": row_i['Course'], "Section A": row_i['Section #'],
+                            "Course B": row_j['Course'], "Section B": row_j['Section #'],
+                            "Time": f"{row_i['Start Time']}–{row_i['End Time']}",
+                            "Day(s)": row_i['Days'],
+                            "RowClass": "red-row"
+                        })
+
+    df_clashes = pd.DataFrame(clash_entries)
+
+    if not df_clashes.empty:
+        grouped = df_clashes.groupby(
+            ["DeptPair", "Course A", "Section A", "Course B", "Section B", "Time", "RowClass"]
+        )['Day(s)'].apply(lambda x: ", ".join(sorted(set(x)))).reset_index()
+    else:
+        grouped = pd.DataFrame(columns=["DeptPair", "Course A", "Section A", "Course B", "Section B", "Time", "Day(s)", "RowClass"])
+
+    html = """<html><head><title>Cross-Department Clashes</title><style>
+    body { font-family: Arial; padding: 20px; background: #f9f9f9; }
+    h1 { text-align: center; color: #002855; }
+    h2 { color: #003366; margin-top: 40px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ccc; }
+    th { background-color: #004B87; color: white; }
+    tr:nth-child(even) { background-color: #f2f2f2; }
+    .red-row { background-color: #ffdddd !important; }
+    </style></head><body>
+    <h1>Cross-Department Clashes (Same Level-300 and Above)</h1>"""
+
+    for pair in [('CS', 'EE'), ('CS', 'CPE'), ('EE', 'CPE')]:
+        section = grouped[grouped['DeptPair'] == pair]
+        html += f"<h2>{pair[0]} - {pair[1]} Clashes</h2>"
+        if not section.empty:
+            html += "<table><tr><th>Course A</th><th>Section A</th><th>Course B</th><th>Section B</th><th>Day(s)</th><th>Time</th></tr>"
+            for _, row in section.iterrows():
+                html += f"<tr class='{row['RowClass']}'><td>{row['Course A']}</td><td>{row['Section A']}</td><td>{row['Course B']}</td><td>{row['Section B']}</td><td>{row['Day(s)']}</td><td>{row['Time']}</td></tr>"
+            html += "</table>"
+        else:
+            html += "<p>No clashes detected for this pair.</p>"
+
+    html += "</body></html>"
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    return output_path
+
+
 
 # --------------------------
 # Streamlit App UI
@@ -208,7 +294,7 @@ st.markdown("""
 - Uploaded file must include the following columns: Course, Section #, Course Title, Meeting Pattern.
 - Only courses that follow standard meeting patterns (day, time) are included.
 - Clashes between any CSEE courses (Capstone) are accepted.
-- Once generated, click on download clash report and open the file on a browser.
+- Once generated, download and open clash reports on a browser.
 - Red marked clashes are between 300 - 300, 300 - 400, 500 - 500, 500 - 600, 600 - 600, 600 -700 levels.
 - Green marked clashes are less important.
 - Free slots shown are 1 hour each, from 9 AM to 9 PM on weekdays.
@@ -233,16 +319,29 @@ if uploaded:
 
 
 if st.button(":gear: Process Schedule"):
-
+    # Generate reports
     clash_path = generate_clash_report(df)
+    cross_path = generate_cross_dept_clash_report(df)
+
+    # Store file contents in session state to persist after rerun
     if clash_path:
         with open(clash_path, "rb") as f:
-            st.download_button("📑 Download Clash Report", data=f.read(), file_name="clash_report.html", mime="text/html")
-    # Save paths in session state
-    st.session_state.clash_path = clash_path
-    st.session_state.generated = True
+            st.session_state.clash_file = f.read()
 
-    st.success("Clash Report generated!")
+    if cross_path:
+        with open(cross_path, "rb") as f:
+            st.session_state.cross_file = f.read()
+
+    st.session_state.generated = True
+    st.success("Clash Reports generated!")
+
+# Render download buttons after rerun
+if st.session_state.get("generated"):
+    if "clash_file" in st.session_state:
+        st.download_button("📑 Download Department Wise Clash Report", data=st.session_state.clash_file, file_name="clash_report.html", mime="text/html")
+
+    if "cross_file" in st.session_state:
+        st.download_button("📑 Download Cross Department Clash Report (CS-EE-CPE)", data=st.session_state.cross_file, file_name="cross_report.html", mime="text/html")
     
 
 

@@ -290,7 +290,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 st.markdown("### 📝 Notes")
 st.markdown("""
-- Upload file in Excel or CSV format only.
+- Upload file in Excel or CSV format and click on the 'Process Schedule' button.
 - Uploaded file must include the following columns: Course, Section #, Course Title, Meeting Pattern.
 - Only courses that follow standard meeting patterns (day, time) are included.
 - Clashes between any CSEE courses (Capstone) are accepted.

@@ -417,6 +417,7 @@ with instructions_tab:
     st.markdown("""
     - Upload file in Excel or CSV format and click on the 'Process Schedule' button
     - Uploaded file must include the following columns: Course, Section #, Course Title, Meeting Pattern
+    - Meeting pattern should only have lecture times (e. g.: MWF 12pm-1:10pm)
     - Once generated, download and open clash reports on a browser
     """)
 
@@ -434,8 +435,8 @@ with rules_tab:
     st.markdown("### 📏 Rules")
     st.markdown("""
     Important Clash Identification Rules (Red): 
-    - Same level courses within departments (300 and above levels)
-    - Between 300-400, 500-600, 600-700 level courses within departments
+    - Same level courses within a department (300 and above levels)
+    - Between 300-400, 500-600, 600-700 level courses within each department
     - Courses scheduled on Wedensday at 4-5 PM
     - Cross department (CS-EE-CPE) same level courses (300 and above levels)
     - Clash between CSEE 480S/481S with any courses from other departments

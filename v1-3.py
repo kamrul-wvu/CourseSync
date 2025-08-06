@@ -38,6 +38,44 @@ def parse_meeting_pattern(pattern):
         return pd.Series([match.group(1), match.group(2), match.group(3)])
     return pd.Series([None, None, None])
 
+def generate_department_calendar_actual_timing(df):
+    df[['Days', 'Start Time', 'End Time']] = df['Meeting Pattern'].apply(parse_meeting_pattern)
+    df['StartTimeObj'] = df['Start Time'].apply(to_datetime_time_safe)
+    df['EndTimeObj'] = df['End Time'].apply(to_datetime_time_safe)
+    df['Department'] = df['Course'].str.extract(r'^([A-Z]+)')
+    df = df.dropna(subset=['StartTimeObj', 'EndTimeObj'])
+
+    calendar_by_dept = {}
+
+    for dept in sorted(df['Department'].dropna().unique()):
+        dept_df = df[df['Department'] == dept].copy()
+        dept_df['Days'] = dept_df['Days'].apply(lambda x: [day_lookup.get(d, d) for d in x if d in day_lookup])
+        dept_df = dept_df.explode('Days')
+
+        # Build unique time slots using exact start-end pairs
+        time_slots = sorted(set([
+            f"{row['StartTimeObj'].strftime('%I:%M %p')}–{row['EndTimeObj'].strftime('%I:%M %p')}"
+            for _, row in dept_df.iterrows()
+        ]), key=lambda x: datetime.strptime(x.split("–")[0], "%I:%M %p"))
+
+        schedule = pd.DataFrame(index=time_slots, columns=days_order)
+        schedule.fillna("", inplace=True)
+
+        for _, row in dept_df.iterrows():
+            slot = f"{row['StartTimeObj'].strftime('%I:%M %p')}–{row['EndTimeObj'].strftime('%I:%M %p')}"
+            day = row['Days']
+            label = row['Course']
+            existing = schedule.loc[slot, day]
+            if existing:
+                schedule.loc[slot, day] = existing + "<br>" + label
+            else:
+                schedule.loc[slot, day] = label
+
+        calendar_by_dept[dept] = schedule
+
+    return calendar_by_dept
+
+
 # --------------------------
 # Clash Report Generator
 # --------------------------
@@ -154,6 +192,9 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
         .red-row { background-color: #ffdddd !important; }
         .green-row { background-color: #ddffdd !important; }
     </style></head><body>
+
+
+
     <h1>Detected Course Clashes</h1>"""
 
     all_departments = sorted(
@@ -366,23 +407,41 @@ def generate_cross_dept_clash_report(df_calendar, output_path="calendar_site/cro
 # --------------------------
 st.image("logo.png", width=150)
 st.title("CourseSync")
-st.markdown("##### West Virginia University")
+st.markdown("##### LCSEE - West Virginia University")
 st.markdown("<br>", unsafe_allow_html=True)
 
-st.markdown("### 📝 Notes")
-st.markdown("""
-- Upload file in Excel or CSV format and click on the 'Process Schedule' button.
-- Uploaded file must include the following columns: Course, Section #, Course Title, Meeting Pattern.
-- Only courses that follow standard meeting patterns (day, time) are included.
-- Clashes between any CSEE courses (Capstone) are accepted.
-- Once generated, download and open clash reports on a browser.
-- Red marked clashes are between 300 - 300, 300 - 400, 500 - 500, 500 - 600, 600 - 600, 600 -700 levels.
-- Green marked clashes are less important.
-- Free slots shown are 1 hour each, from 9 AM to 9 PM on weekdays.
-- For cross department (CS-EE-CPE) clash report, only same level (300 and Above) clashes are shown.             
+instructions_tab, notes_tab, rules_tab = st.tabs(["📂 User Instructions", "📝 Notes", "📏 Rules"])
 
-""")
+with instructions_tab:
+    st.markdown("### 📂 User Instructions")
+    st.markdown("""
+    - Upload file in Excel or CSV format and click on the 'Process Schedule' button
+    - Uploaded file must include the following columns: Course, Section #, Course Title, Meeting Pattern
+    - Once generated, download and open clash reports on a browser
+    """)
 
+with notes_tab:
+    st.markdown("### 📝 Notes")
+    st.markdown("""
+    - Only courses that follow standard meeting patterns (day, time) are included
+    - Red marked clashes are important
+    - Green marked clashes are acceptable
+    - In clash report, free slots shown are 1 hour each, from 9 AM to 9 PM on weekdays
+    - Wednesday 4-5 PM slots are not shown as available
+    """)
+
+with rules_tab:
+    st.markdown("### 📏 Rules")
+    st.markdown("""
+    Important Clash Identification Rules (Red): 
+    - Same level courses within departments (300 and above levels)
+    - Between 300-400, 500-600, 600-700 level courses within departments
+    - Courses scheduled on Wedensday at 4-5 PM
+    - Cross department (CS-EE-CPE) same level courses (300 and above levels)
+    - Clash between CSEE 480S/481S with any courses from other departments
+    """)
+
+st.markdown("---")
 uploaded = st.file_uploader("Upload Course Schedule (Excel or CSV)", type=['xlsx', 'csv'])
 
 if uploaded:
@@ -453,15 +512,19 @@ if st.button(":gear: Process Schedule"):
                     elif "CS – CPE" in label:
                         cross_red_count["CS-CPE"] = count
 
+    st.session_state.generated = True
+    st.success("Clash Report and Calendar Generated!")
+    st.markdown("---")
     # ✅ Display summary in Streamlit
-    st.markdown("### 🔴 Clash Summary:")
+    st.markdown("#### 🔴 Clash Summary:")
     st.markdown(f"- Department Wise Clashes: **{clash_counts['non_acceptable']}**")
     st.markdown(f"- Wednesday 4–5 PM Clashes: **{clash_counts['wednesday_4_5']}**")
     st.markdown(f"- CSEE (480S/481S) with All Department (300–400) Clashes: **{cross_counts['CSEE_480S_481S']}**")
     st.markdown(f"- CS – EE Clashes (Same Level): **{cross_counts['CS-EE']}**")
     st.markdown(f"- EE – CPE Clashes (Same Level): **{cross_counts['EE-CPE']}**")
     st.markdown(f"- CS – CPE Clashes (Same Level): **{cross_counts['CS-CPE']}**")
-
+ 
+  
     # Store file contents in session state to persist after rerun
     if clash_path:
         with open(clash_path, "rb") as f:
@@ -471,23 +534,64 @@ if st.button(":gear: Process Schedule"):
         with open(cross_path, "rb") as f:
             st.session_state.cross_file = f.read()
 
-    st.session_state.generated = True
-    st.success("Clash Reports generated!")
+
 
 # Render download buttons after rerun
+
+
 if st.session_state.get("generated"):
     if "clash_file" in st.session_state:
         st.download_button("📑 Download Department Wise Clash Report", data=st.session_state.clash_file, file_name="clash_report.html", mime="text/html")
 
     if "cross_file" in st.session_state:
         st.download_button("📑 Download Cross Department Clash Report (CS-EE-CPE-CSEE)", data=st.session_state.cross_file, file_name="cross_report.html", mime="text/html")
-    
 
 
-st.markdown("<br>", unsafe_allow_html=True)
-st.markdown("""
-    <div style="position: center; bottom: 0; width: 100%; text-align: center; padding: 10px;">
-        <p style="font-size: 12px; color: #FFF;">Queries: kamrul.hasan@mail.wvu.edu | 304 685 8910</p>
-	<p style="font-size: 12px; color: #FFF;">Version: 1.0</p>
-    </div>
-    """, unsafe_allow_html=True)
+
+
+
+# 🗓️ Display Actual-Time Department Calendars
+
+
+
+if uploaded and st.session_state.get("generated", False):
+    st.markdown("---")
+    st.markdown("#### 🗓️ Department Wise Course Calendar")
+    dept_calendars = generate_department_calendar_actual_timing(df)
+    if dept_calendars:
+        tabs = st.tabs([f"📘 {dept}" for dept in dept_calendars.keys()])
+
+        for tab, (dept, table) in zip(tabs, dept_calendars.items()):
+            with tab:
+                st.markdown(
+                    """
+                    <style>
+                    .styled-table {
+                        border-collapse: collapse;
+                        margin: 20px 0;
+                        font-size: 14px;
+                        width: 100%;
+                        border: 1px solid #ccc;
+                    }
+                    .styled-table thead tr {
+                        background-color: #004B87;
+                        color: #ffffff;
+                        text-align: center;
+                    }
+                    .styled-table th, .styled-table td {
+                        padding: 8px 10px;
+                        text-align: center;
+                        border: 1px solid #ccc;
+                        vertical-align: top;
+                    }
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                styled_html = table.fillna("").to_html(
+                    escape=False,
+                    index=True,
+                    classes="styled-table"
+                )
+                st.markdown(styled_html, unsafe_allow_html=True)

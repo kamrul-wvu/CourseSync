@@ -87,9 +87,16 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
                     if level_i is None or level_j is None:
                         continue
                     levels = sorted([level_i // 100, level_j // 100])
-                    row_class = "red-row" if (levels == [3, 3] or levels == [3, 4] or levels == [4, 4] or
-                                              levels == [5, 5] or levels == [5, 6] or levels == [6, 6] or
-                                              levels == [6, 7]) else "green-row"
+                    
+
+                    # Make all clashes involving CSEE department acceptable
+                    if row_i['Department'] == 'CSEE' or row_j['Department'] == 'CSEE':
+                        row_class = "green-row"
+                    else:
+                        row_class = "red-row" if (levels == [3, 3] or levels == [3, 4] or levels == [4, 4] or
+                              levels == [5, 5] or levels == [5, 6] or levels == [6, 6] or
+                              levels == [6, 7]) else "green-row"
+
                     clash_entries.append({
                         "Department": dept,
                         "Course A": row_i['Course'], "Section A": row_i['Section #'],
@@ -200,6 +207,7 @@ st.markdown("""
 - Upload file in Excel or CSV format only.
 - Uploaded file must include the following columns: Course, Section #, Course Title, Meeting Pattern.
 - Only courses that follow standard meeting patterns (day, time) are included.
+- Clashes between any CSEE courses (Capstone) are accepted.
 - Once generated, click on download clash report and open the file on a browser.
 - Red marked clashes are between 300 - 300, 300 - 400, 500 - 500, 500 - 600, 600 - 600, 600 -700 levels.
 - Green marked clashes are less important.

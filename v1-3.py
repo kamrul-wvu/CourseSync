@@ -437,6 +437,25 @@ with notes_tab:
     - In clash report, free slots shown are 1 hour each, from 9 AM to 9 PM on weekdays
     - Wednesday 4-5 PM slots are not shown as available
     """)
+    st.markdown(
+    """
+    <a href="https://raw.githubusercontent.com/kamrul-wvu/CourseSync/main/CourseSync%20Documentation.pdf" download target="_blank">
+        <button style="
+            font-size: 16px;
+            padding: 8px 16px;
+            background-color: #0077CC;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        ">
+            📥 Download Documentation
+        </button>
+    </a>
+    """,
+    unsafe_allow_html=True
+    )
+
 
 with rules_tab:
     st.markdown("##### 📏 Rules")

@@ -405,7 +405,7 @@ def generate_cross_dept_clash_report(df_calendar, output_path="calendar_site/cro
 # --------------------------
 # Streamlit App UI
 # --------------------------
-st.image("logo.png", width=150)
+st.image("logo.png", width=100)
 st.title("CourseSync")
 st.markdown("##### LCSEE - West Virginia University")
 st.markdown("<br>", unsafe_allow_html=True)

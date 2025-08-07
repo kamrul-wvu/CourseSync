@@ -596,3 +596,16 @@ if uploaded and st.session_state.get("generated", False):
                     classes="styled-table"
                 )
                 st.markdown(styled_html, unsafe_allow_html=True)
+
+st.markdown("---")
+st.markdown(
+    """
+    <div style='text-align: center; font-size: 13px; color: #555;'>
+        <b>Queries/Requests:</b>
+        💻 Kamrul Hasan &nbsp;|&nbsp; 🏫 Ph.D. in CS &nbsp;|&nbsp; 
+        📧 <a href='mailto:kamrul.hasan@mail.wvu.edu'>kamrul.hasan@mail.wvu.edu</a> &nbsp;|&nbsp;
+        📞 304-685-8910
+    </div>
+    """,
+    unsafe_allow_html=True
+)

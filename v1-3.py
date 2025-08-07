@@ -407,6 +407,13 @@ def generate_cross_dept_clash_report(df_calendar, output_path="calendar_site/cro
 # --------------------------
 st.image("logo.png", width=100)
 st.title("CourseSync")
+
+st.markdown(
+    "<div style='text-align: left; font-size: 11px; color: #888;'>"
+    "Version 1.3 | Last updated: August 6, 2025"
+    "</div>",
+    unsafe_allow_html=True
+)
 st.markdown("##### LCSEE - West Virginia University")
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -608,3 +615,4 @@ if uploaded and st.session_state.get("generated", False):
                     classes="styled-table"
                 )
                 st.markdown(styled_html, unsafe_allow_html=True)
+

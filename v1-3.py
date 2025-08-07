@@ -410,10 +410,10 @@ st.title("CourseSync")
 st.markdown("##### LCSEE - West Virginia University")
 st.markdown("<br>", unsafe_allow_html=True)
 
-instructions_tab, notes_tab, rules_tab = st.tabs(["📂 User Instructions", "📝 Notes", "📏 Rules"])
+instructions_tab, notes_tab, rules_tab, contact_tab = st.tabs(["📂 User Instructions", "📝 Notes", "📏 Rules", "📇 Contact"])
 
 with instructions_tab:
-    st.markdown("### 📂 User Instructions")
+    st.markdown("##### 📂 User Instructions")
     st.markdown("""
     - Upload file in Excel or CSV format and click on the 'Process Schedule' button
     - Uploaded file must include the following columns: Course, Section #, Course Title, Meeting Pattern
@@ -422,7 +422,7 @@ with instructions_tab:
     """)
 
 with notes_tab:
-    st.markdown("### 📝 Notes")
+    st.markdown("##### 📝 Notes")
     st.markdown("""
     - Only courses that follow standard meeting patterns (day, time) are included
     - Red marked clashes are important
@@ -432,7 +432,7 @@ with notes_tab:
     """)
 
 with rules_tab:
-    st.markdown("### 📏 Rules")
+    st.markdown("##### 📏 Rules")
     st.markdown("""
     Important Clash Identification Rules (Red): 
     - Same level courses within a department (300 and above levels)
@@ -441,6 +441,18 @@ with rules_tab:
     - Cross department (CS-EE-CPE) same level courses (300 and above levels)
     - Clash between CSEE 480S/481S and any 300/400 level courses from other departments
     """)
+
+with contact_tab:
+    st.markdown("##### 📇 Contact Information")
+    st.markdown("""
+**Kamrul Hasan**  
+*Ph.D. in Computer Science, WVU*  
+[kamrul.hasan@mail.wvu.edu](mailto:kamrul.hasan@mail.wvu.edu)  
+304‑685‑8910  
+    """)
+
+
+
 
 st.markdown("---")
 uploaded = st.file_uploader("Upload Course Schedule (Excel or CSV)", type=['xlsx', 'csv'])
@@ -596,16 +608,3 @@ if uploaded and st.session_state.get("generated", False):
                     classes="styled-table"
                 )
                 st.markdown(styled_html, unsafe_allow_html=True)
-
-st.markdown("---")
-st.markdown(
-    """
-    <div style='text-align: center; font-size: 13px; color: #555;'>
-        <b>Queries/Requests:</b>
-        💻 Kamrul Hasan &nbsp;|&nbsp; 🏫 Ph.D. in CS &nbsp;|&nbsp; 
-        📧 <a href='mailto:kamrul.hasan@mail.wvu.edu'>kamrul.hasan@mail.wvu.edu</a> &nbsp;|&nbsp;
-        📞 304-685-8910
-    </div>
-    """,
-    unsafe_allow_html=True
-)

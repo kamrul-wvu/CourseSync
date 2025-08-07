@@ -195,7 +195,7 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
 
 
 
-    <h1>Detected Course Clashes</h1>"""
+    <h1>Department-Wise Clash Report</h1>"""
 
     all_departments = sorted(
         df_calendar['Department'].dropna().unique(),
@@ -206,7 +206,7 @@ def generate_clash_report(df_calendar, output_path="calendar_site/clash_report.h
         html += f"<h2>{dept} Department</h2>"
 
         # 📅 Free Slot Table with 🔒 Lock
-        html += "<h3>📆 Weekly Free Slot Overview (1-Hour Blocks)</h3>"
+        html += "<h3>📆 Weekly Available Slot Overview (1-Hour Blocks)</h3>"
         html += "<table style='text-align:center; border-collapse:collapse;'><tr><th style='border:1px solid #aaa;'>Time</th>"
         html += "".join(f"<th style='border:1px solid #aaa;'>{day}</th>" for day in days_order)
         html += "</tr>"

@@ -439,7 +439,7 @@ with rules_tab:
     - Between 300-400, 500-600, 600-700 level courses within each department
     - Courses scheduled on Wedensday at 4-5 PM
     - Cross department (CS-EE-CPE) same level courses (300 and above levels)
-    - Clash between CSEE 480S/481S with any courses from other departments (300 and above levels)
+    - Clash between CSEE 480S/481S and any 300/400 level courses from other departments
     """)
 
 st.markdown("---")
